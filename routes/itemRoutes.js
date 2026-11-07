@@ -84,14 +84,23 @@ router.post('/bulk', async (req, res, next) => {
       if (keys.has(key)) return res.status(409).json({ message: 'The upload contains duplicate items.' });
       keys.add(key);
     }
-    const existing = await Item.exists({
+    const existing = await Item.find({
       user: req.userId,
       $or: docs.map(({ visibleIn, category, name }) => ({ visibleIn, category, name })),
-    });
-    if (existing) return res.status(409).json({ message: 'An item in the upload already exists. Remove duplicates and try again.' });
+    }).select('visibleIn category name').lean();
+    const existingKeys = new Set(existing.map((item) =>
+      `${item.visibleIn}\u0000${item.category}\u0000${item.name}`
+    ));
+    const newDocs = docs.filter((item) =>
+      !existingKeys.has(`${item.visibleIn}\u0000${item.category}\u0000${item.name}`)
+    );
 
-    const result = await Item.insertMany(docs);
-    return res.status(201).json({ inserted: result.length, items: result });
+    const inserted = newDocs.length ? await Item.insertMany(newDocs) : [];
+    return res.status(201).json({
+      inserted: inserted.length,
+      skipped: docs.length - inserted.length,
+      items: inserted,
+    });
   } catch (error) {
     if (error instanceof mongoose.Error.ValidationError || error.code === 11000) {
       return res.status(409).json({ message: 'Some rows were invalid or duplicate; remove duplicates and upload again.' });
